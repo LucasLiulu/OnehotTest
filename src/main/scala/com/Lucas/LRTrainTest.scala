@@ -10,6 +10,7 @@ import org.apache.spark.ml.{Pipeline, PipelineStage}
 import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.ml.feature.{OneHotEncoder, StringIndexer, VectorAssembler}
 import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.hive.HiveContext
 import org.apache.spark.sql._
 import org.apache.spark.sql.types._
@@ -19,7 +20,9 @@ import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
 object LRTrainTest {
   val logger: Logger = Logger.getLogger(LRTrainTest.getClass)
-  val logPath = "I:\\data\\openSourceDataSets\\lr_test03.json"
+  val testPath = "I:\\data\\openSourceDataSets\\lr_test03.json"
+//  val testPath = "hdfs://nameservice1/inveno-data/inveno-content/news-content/imeiContId/click_impression_data/201902/onlyLogData/lr_test03.json"
+
 
   def main(args: Array[String]): Unit = {
     val sparkConf: SparkConf = new SparkConf().setAppName("LRTrainTest")
@@ -37,8 +40,13 @@ object LRTrainTest {
     sc.setLogLevel("WARN")
     val colArray2 = Array("gender", "age", "yearsmarried", "children", "religiousness", "education", "occupation", "rating")
 //    val dataDF = sqlContext.read.json(logPath).select($"affairs", $"children", $"religiousness", $"education", $"occupation", $"rating")
-//    直接从json文件读取并转换成dataframe
-    val dataDF: DataFrame = sqlContext.read.format("json").load(logPath)
+//    直接从json文件读取并转换成dataframe，亲测这种方法可以直接从hdfs中读取json数据并转成dataframe
+    val dataDF: DataFrame = sqlContext.read.format("json").load(testPath)
+    // 以下方法可以将dataframe转换成rdd，其中row3对应的方法最实用。
+    val rows: RDD[Row] = dataDF.rdd
+    val rows2 = dataDF.map(row => (row(1), row(2)))
+    val row3 = dataDF.map(row => (row(1), row(2))).map(x => x._2)
+//    val dataDF: DataFrame = sqlContext.read.format("json").load(logPath)
 //    需要进行onehot编码的特征
     val categoricalColumns = Array("gender", "children")
 //    采用pipeline的方式处理机器学习流程
@@ -64,7 +72,7 @@ object LRTrainTest {
     val pipelineModel = pipeline.fit(dataDF)
 //    针对statesArray中的每个操作，进行真实的转换
     val dataset = pipelineModel.transform(dataDF)
-//    dataset.show(false)
+    dataset.show(false)
 //    划分训练集和测试集
     val Array(trainningDF, testDF) = dataset.randomSplit(Array(0.6, 0.4), seed = 123)
     println(s"trainingDF size=${trainningDF.count()}, testDF, size=${testDF.count()}")
@@ -72,7 +80,7 @@ object LRTrainTest {
     val lrModel = new LogisticRegression().setLabelCol("affairs").setFeaturesCol("features").fit(trainningDF)
 //    预测，并重命名label字段
     val predictions = lrModel.transform(testDF).select("affairs","features", "rawPrediction", "probability", "prediction").withColumnRenamed("affairs", "label")
-//    predictions.show(false)
+    predictions.show(false)
 //    评价模型离线性能
     val evaluator = new BinaryClassificationEvaluator()
 //    指定离线评价指标
@@ -85,11 +93,11 @@ object LRTrainTest {
 //    val auPR  = metrics.areaUnderPR()
 
     // 保存训练好的模型
-    lrModel.write.overwrite().save(".\\model\\first.model")
+    lrModel.write.overwrite().save("./first.model")
 
     // 在Java/scala程序里，引入spark core，spark mllib等包，加载模型。
     // 特别注意：此处加载时用的是LogisticRegressionModel
-    val lrLoadModel = LogisticRegressionModel.load(".\\model\\first.model")
+    val lrLoadModel = LogisticRegressionModel.load("./first.model")
     val predictRaw = lrLoadModel.getClass.getMethod("predictRaw", classOf[Vector]).invoke(lrLoadModel, testDF.select("features").first()(0).asInstanceOf[Vector])  //.asInstanceOf[Vector]
     println("predictRaw: " + predictRaw)
 //    使用spark 流式计算作预测
